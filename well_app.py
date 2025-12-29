@@ -8,14 +8,13 @@ from scipy import signal
 import io
 import chardet
 
-# 1. 页面基础配置
+# 1. 页面配置
 st.set_page_config(page_title="层序地质解析系统", layout="wide")
 
 
 # --- 核心算法函数 ---
 def get_inpefa(series, order=1):
-    """计算 INPEFA 曲线"""
-    # 使用符合未来规范的填充方式
+    """计算 INPEFA 曲线，改用新版 Pandas 填充语法"""
     clean_series = series.interpolate().ffill().bfill()
     data = (clean_series - clean_series.mean()) / clean_series.std()
     for _ in range(order):
@@ -25,7 +24,7 @@ def get_inpefa(series, order=1):
 
 def get_wavelet_analysis(series, max_scale=128):
     """执行连续小波变换 (CWT)"""
-    # 修复 fillna 弃用警告
+    # 彻底修复 fillna 弃用警告
     data = series.interpolate().ffill().bfill().values
     if len(data) < 10:
         return np.zeros((max_scale, len(data))), np.zeros(len(data))
@@ -48,7 +47,7 @@ def get_astro_cycles(series, low_freq, high_freq):
 
 
 def load_data(file):
-    """加载数据"""
+    """加载数据逻辑"""
     try:
         raw_bytes = file.read()
         det = chardet.detect(raw_bytes)
@@ -98,6 +97,7 @@ if uploaded_file and (depth_col and target_col):
 
         d_min, d_max = float(df[depth_col].min()), float(df[depth_col].max())
 
+        # 核心绘图区
         fig = make_subplots(
             rows=1, cols=5,
             shared_yaxes=True,
@@ -111,10 +111,16 @@ if uploaded_file and (depth_col and target_col):
         fig.add_trace(
             go.Scatter(x=df['INPEFA'], y=df[depth_col], name="INPEFA", line=dict(color='darkblue', width=1.5)), row=1,
             col=2)
-        # 保持矩阵转置修复
-        fig.add_trace(
-            go.Heatmap(z=w_matrix.T, x=np.arange(1, max_scale + 1), y=df[depth_col], colorscale='Jet', showscale=False),
-            row=1, col=3)
+
+        # 修正 CWT 填充问题：使用 w_matrix.T
+        fig.add_trace(go.Heatmap(
+            z=w_matrix.T,
+            x=np.arange(1, max_scale + 1),
+            y=df[depth_col],
+            colorscale='Jet',
+            showscale=False
+        ), row=1, col=3)
+
         fig.add_trace(
             go.Scatter(x=df['Wavelet_Energy'], y=df[depth_col], name="Energy", line=dict(color='purple', width=1.2)),
             row=1, col=4)
@@ -122,24 +128,44 @@ if uploaded_file and (depth_col and target_col):
                       row=1, col=5)
 
         fig.update_yaxes(range=[d_max, d_min], title="Depth (m)")
-        fig.update_layout(height=1000, template="plotly_white", margin=dict(t=50, b=50, l=80, r=40),
+        fig.update_layout(height=900, template="plotly_white", margin=dict(t=50, b=50, l=80, r=40),
                           hovermode="y unified")
 
-        # 【重点】将 use_container_width=True 替换为 width="stretch"
-        st.plotly_chart(fig, width="stretch")
+        # 【重点修改】不再显式设置宽度参数，Streamlit 将自动使用当前容器的最佳宽度
+        st.plotly_chart(fig)
 
         st.markdown("---")
+        # 下载按钮也不再手动设置宽度相关的参数
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
-            csv = df.to_csv(index=False).encode('utf-8')
-            # 按钮也同步更新
-            st.download_button("💾 下载分析数据 (CSV)", data=csv, file_name="analysis_results.csv", width="stretch")
+            csv_data = df.to_csv(index=False).encode('utf-8')
+            st.download_button("💾 下载 CSV 数据", data=csv_data, file_name="results.csv")
         with col_btn2:
             html_buf = io.StringIO()
             fig.write_html(html_buf, include_plotlyjs='cdn')
-            st.download_button("🌐 下载交互式 HTML 图表", data=html_buf.getvalue(), file_name="geology_chart.html",
-                               width="stretch")
+            st.download_button("🌐 下载 HTML 图表", data=html_buf.getvalue(), file_name="chart.html")
     else:
         st.error("❌ 数据无效")
+
+        # --- 原理说明区 ---
+        st.markdown("---")
+        st.header("📘 曲线原理与调节指南")
+        exp1, exp2 = st.columns(2)
+        with exp1:
+            st.subheader("曲线地质含义")
+            st.markdown("""
+                - **Raw Log**: 原始曲线，反映岩性或物性的基础波动。
+                - **INPEFA Trend**: 趋势线。上升段对应水退/供应增加，下降段对应水侵/可容空间增加。
+                - **CWT Spectrum**: 展现不同尺度旋回的强度。
+                - **Wavelet Energy**: 识别地层能量剧变，用于确定关键层序界面。
+                - **Astro Cycle**: 天文旋回。反映受轨道力控制的周期性信号，用于高频旋回划分与精细对比。
+                """)
+        with exp2:
+            st.subheader("参数调节说明")
+            st.markdown(f"""
+                - **INPEFA 阶数 ({inpefa_order})** : 增加阶数会使曲线更平滑，帮助识别二级或三级层序长周期趋势；降低阶数则保留更多局部细节。
+                - **小波尺度 ({max_scale})** : 尺度越大，系统越能识别出超厚叠置组的地学旋回。
+                - **频率带范围**: 根据地质经验微调，可剔除干扰杂波，精准锁定受天文驱动的沉积节拍
+                """)
 else:
-    st.info("👈 请在左侧上传数据文件。")
+    st.info("👈 请在左侧上传数据文件开始分析。")
