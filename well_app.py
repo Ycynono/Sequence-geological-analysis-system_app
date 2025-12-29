@@ -8,14 +8,14 @@ from scipy import signal
 import io
 import chardet
 
-# 1. 页面基础配置：设置为宽屏模式
+# 1. 页面基础配置
 st.set_page_config(page_title="层序地质解析系统", layout="wide")
 
 
 # --- 核心算法函数 ---
 def get_inpefa(series, order=1):
     """计算 INPEFA 曲线"""
-    # 显式处理缺失值以避免计算警告
+    # 使用符合未来规范的填充方式
     clean_series = series.interpolate().ffill().bfill()
     data = (clean_series - clean_series.mean()) / clean_series.std()
     for _ in range(order):
@@ -24,8 +24,8 @@ def get_inpefa(series, order=1):
 
 
 def get_wavelet_analysis(series, max_scale=128):
-    """执行连续小波变换 (CWT) 并计算能量"""
-    # 使用新版推荐的填充方式
+    """执行连续小波变换 (CWT)"""
+    # 修复 fillna 弃用警告
     data = series.interpolate().ffill().bfill().values
     if len(data) < 10:
         return np.zeros((max_scale, len(data))), np.zeros(len(data))
@@ -37,7 +37,7 @@ def get_wavelet_analysis(series, max_scale=128):
 
 
 def get_astro_cycles(series, low_freq, high_freq):
-    """提取天文旋回（带通滤波）"""
+    """提取天文旋回"""
     data = series.interpolate().ffill().bfill().values
     if len(data) < 30: return np.zeros(len(data))
     try:
@@ -48,7 +48,7 @@ def get_astro_cycles(series, low_freq, high_freq):
 
 
 def load_data(file):
-    """加载测井数据并自动检测编码"""
+    """加载数据"""
     try:
         raw_bytes = file.read()
         det = chardet.detect(raw_bytes)
@@ -61,11 +61,9 @@ def load_data(file):
         return None
 
 
-# --- UI 界面布局 ---
-
+# --- UI 界面 ---
 st.title("🏹 层序地质解析系统")
 
-# --- A. 侧边栏：参数配置与文件上传 ---
 with st.sidebar:
     st.header("📁 数据与参数")
     uploaded_file = st.file_uploader("上传测井数据", type=["csv", "txt", "xlsx", "xls", "las"])
@@ -86,7 +84,6 @@ with st.sidebar:
             max_scale = st.slider("小波尺度", 32, 512, 128)
             freq_range = st.slider("旋回频带", 0.001, 0.499, (0.01, 0.08))
 
-# --- B. 主界面：图表展示区域 ---
 if uploaded_file and (depth_col and target_col):
     df = df_raw.copy()
     df[depth_col] = pd.to_numeric(df[depth_col], errors='coerce')
@@ -109,13 +106,12 @@ if uploaded_file and (depth_col and target_col):
             column_widths=[0.12, 0.12, 0.38, 0.18, 0.20]
         )
 
-        # 绘图轨迹
         fig.add_trace(go.Scatter(x=df[target_col], y=df[depth_col], name="Log", line=dict(color='#2c3e50', width=1)),
                       row=1, col=1)
         fig.add_trace(
             go.Scatter(x=df['INPEFA'], y=df[depth_col], name="INPEFA", line=dict(color='darkblue', width=1.5)), row=1,
             col=2)
-        # 这里保留了关键的 .T 转置修复
+        # 保持矩阵转置修复
         fig.add_trace(
             go.Heatmap(z=w_matrix.T, x=np.arange(1, max_scale + 1), y=df[depth_col], colorscale='Jet', showscale=False),
             row=1, col=3)
@@ -129,23 +125,21 @@ if uploaded_file and (depth_col and target_col):
         fig.update_layout(height=1000, template="plotly_white", margin=dict(t=50, b=50, l=80, r=40),
                           hovermode="y unified")
 
-        # 按照 2025 新规范，将 use_container_width 替换为 width="stretch"
+        # 【重点】将 use_container_width=True 替换为 width="stretch"
         st.plotly_chart(fig, width="stretch")
 
-        # 4. 数据导出按钮
         st.markdown("---")
         col_btn1, col_btn2 = st.columns(2)
         with col_btn1:
             csv = df.to_csv(index=False).encode('utf-8')
-            # 按钮也更新为新规范 width="stretch"
+            # 按钮也同步更新
             st.download_button("💾 下载分析数据 (CSV)", data=csv, file_name="analysis_results.csv", width="stretch")
         with col_btn2:
             html_buf = io.StringIO()
             fig.write_html(html_buf, include_plotlyjs='cdn')
             st.download_button("🌐 下载交互式 HTML 图表", data=html_buf.getvalue(), file_name="geology_chart.html",
                                width="stretch")
-
     else:
-        st.error("❌ 数据处理出错，请确认所选列包含有效的数值。")
+        st.error("❌ 数据无效")
 else:
-    st.info("👈 系统就绪！请在左侧侧边栏上传测井数据文件。")
+    st.info("👈 请在左侧上传数据文件。")
